@@ -1,13 +1,13 @@
+import 'dart:async';
+import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:network_info_plus/network_info_plus.dart';
-import 'package:ping_discover_network_plus/ping_discover_network_plus.dart';
 import '../models/network_device.dart';
-import 'dart:io';
 import 'mac_vendor_service.dart';
 
 class NetworkDiscoveryService extends ChangeNotifier {
   final NetworkInfo _networkInfo = NetworkInfo();
-  
+
   List<NetworkDevice> _devices = [];
   List<NetworkDevice> get devices => _devices;
 
@@ -19,72 +19,90 @@ class NetworkDiscoveryService extends ChangeNotifier {
 
   Future<void> scanNetwork() async {
     if (_isScanning) return;
-    
+
     _isScanning = true;
-    _devices.clear();
+    _devices = [];
     notifyListeners();
 
     try {
       final String? wifiIP = await _networkInfo.getWifiIP();
       _gatewayIp = await _networkInfo.getWifiGatewayIP();
-      
-      if (wifiIP != null && _gatewayIp != null) {
+
+      if (wifiIP != null) {
         final String subnet = wifiIP.substring(0, wifiIP.lastIndexOf('.'));
-        
-        // Find devices responding to standard ports (e.g. 80, or just pinging)
-        // Note: ARP reading is restricted on newer Android, so ping scan is preferred
-        final stream = NetworkAnalyzer.discover2(subnet, 80, timeout: Duration(milliseconds: 500));
-        
-        await for (final NetworkAddress addr in stream) {
-          if (addr.exists) {
-            final device = NetworkDevice(ipAddress: addr.ip);
-            
-            // Attempt to resolve hostname
-            try {
-              final host = await InternetAddress(addr.ip).reverse();
-              device.hostname = host.host;
-            } catch (e) {
-              device.hostname = 'Unknown Device';
-            }
-            
-            // Attempt to get MAC from ARP table (works on some Android/OSes)
-            try {
-              final result = await Process.run('arp', ['-a']);
-              if (result.stdout != null) {
-                final String output = result.stdout.toString();
-                final lines = output.split('\n');
-                for (var line in lines) {
-                  if (line.contains(addr.ip)) {
-                    // Extract MAC address using basic regex or split
-                    final parts = line.split(RegExp(r'\s+'));
-                    if (parts.length > 2) {
-                      final maybeMac = parts.firstWhere(
-                        (p) => p.contains(':') || p.contains('-'),
-                        orElse: () => '',
-                      );
-                      if (maybeMac.isNotEmpty) {
-                        device.macAddress = maybeMac;
-                        device.vendor = await MacVendorService.getVendor(maybeMac);
-                        break;
-                      }
-                    }
-                  }
-                }
-              }
-            } catch (e) {
-              print('ARP lookup failed: \$e');
-            }
-            
-            _devices.add(device);
-            notifyListeners();
-          }
+
+        // Scan all 254 hosts concurrently using raw socket ping
+        final futures = <Future>[];
+        for (int i = 1; i <= 254; i++) {
+          final ip = '$subnet.$i';
+          futures.add(_pingAndAdd(ip));
         }
+        await Future.wait(futures);
       }
     } catch (e) {
-      print('Network scan error: \$e');
+      debugPrint('Network scan error: $e');
     } finally {
       _isScanning = false;
       notifyListeners();
     }
+  }
+
+  Future<void> _pingAndAdd(String ip) async {
+    try {
+      final socket = await Socket.connect(ip, 80,
+          timeout: const Duration(milliseconds: 400));
+      socket.destroy();
+
+      final device = NetworkDevice(ipAddress: ip);
+
+      // Reverse DNS
+      try {
+        final hosts = await InternetAddress(ip).reverse();
+        device.hostname = hosts.host != ip ? hosts.host : null;
+      } catch (_) {}
+
+      // ARP table lookup for MAC address
+      await _arpLookup(device);
+
+      _devices.add(device);
+      notifyListeners();
+    } catch (_) {
+      // Host not reachable on port 80, try port 443
+      try {
+        final socket = await Socket.connect(ip, 443,
+            timeout: const Duration(milliseconds: 400));
+        socket.destroy();
+
+        final device = NetworkDevice(ipAddress: ip);
+        try {
+          final hosts = await InternetAddress(ip).reverse();
+          device.hostname = hosts.host != ip ? hosts.host : null;
+        } catch (_) {}
+        await _arpLookup(device);
+        _devices.add(device);
+        notifyListeners();
+      } catch (_) {}
+    }
+  }
+
+  Future<void> _arpLookup(NetworkDevice device) async {
+    try {
+      final result = await Process.run('arp', ['-a']);
+      final output = result.stdout.toString();
+      for (final line in output.split('\n')) {
+        if (line.contains(device.ipAddress)) {
+          final parts = line.trim().split(RegExp(r'\s+'));
+          final mac = parts.firstWhere(
+            (p) => p.contains(':') || p.contains('-'),
+            orElse: () => '',
+          );
+          if (mac.isNotEmpty) {
+            device.macAddress = mac;
+            device.vendor = await MacVendorService.getVendor(mac);
+          }
+          break;
+        }
+      }
+    } catch (_) {}
   }
 }
