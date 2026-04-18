@@ -88,7 +88,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           color: Colors.blueAccent
                         ),
                         title: Text(device.hostname ?? device.vendor ?? device.ipAddress),
-                        subtitle: Text('\${device.ipAddress} \${device.vendor != null ? '• \${device.vendor}' : ''}'),
+                        subtitle: Text('\${device.ipAddress} \${device.vendor != null ? "• \${device.vendor}" : ""}'),
                         trailing: const Icon(Icons.chevron_right, color: Colors.white54),
                         onTap: () {
                           Navigator.push(
