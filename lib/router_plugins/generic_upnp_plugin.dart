@@ -1,5 +1,5 @@
 import 'dart:async';
-import 'package:upnp/upnp.dart';
+import 'package:upnp2/upnp.dart';
 import '../models/network_device.dart';
 import 'router_plugin_interface.dart';
 
