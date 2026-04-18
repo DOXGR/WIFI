@@ -25,6 +25,13 @@ jobs:
           flutter-version: '3.19.0'
           channel: 'stable'
 
+      - name: Generate Native Folders
+        run: flutter create --platforms android .
+
+      - name: Inject Android Permissions
+        run: |
+          sed -i '/<application/i \    <uses-permission android:name="android.permission.INTERNET" />\n    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />\n    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />\n    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />\n    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />' android/app/src/main/AndroidManifest.xml
+
       - name: Install Dependencies
         run: flutter pub get
 
